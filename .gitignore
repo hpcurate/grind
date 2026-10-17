@@ -1,0 +1,12 @@
+# dependencies — restored with `npm install`
+node_modules/
+
+# build output — regenerated with `npm run pack`
+dist/
+
+# GUI-check screenshots from `npm run test:ui`
+shot-*.png
+test/artifacts/
+
+# logs
+*.log

@@ -14,6 +14,8 @@ A Windows desktop hub for drum & bass production, sound design and socials.
 - **Todoist** — send a drill, challenge or post idea as a task; ticking it
   there finishes it here.
 - **CREATE** — reads your sessions and songs from root's sync, read-only.
+- **Session bar** — a focus clock in the title bar with a goal and breaks;
+  one click links FLOW, whose timer and music then follow it.
 
 ```
 npm install

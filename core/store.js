@@ -53,9 +53,14 @@ function blank(docs) {
                rootProject: '04 | core', rootSection: 'claude/codex',
                lastPoll: 0, linked: {} },   // linked: taskId → { kind: lesson|challenge|post, id }
     desk: null,        // the CREATE summary last read from root's sync tasks
-    settings: { hotkeys: false, notify: true, window: 'week' },
+    session: null,     // the live focus session, kept on disk so a crash loses nothing
+    sessions: [],      // { start, end, focusSec, goalSec, breaks } — finished ones with a minute or more of focus
+    settings: { hotkeys: false, notify: true, window: 'week',
+                session: { ...SESSION }, flowExe: null },
   };
 }
+const SESSION = { goalMin: 120, breakEvery: 50, breakMin: 10, notify: true };
+const PHASES = ['focus', 'break'];
 
 /* ── Reading ──────────────────────────────────────────────────────────────
    A record read at boot is the most dangerous input the app has (ROOT learnt
@@ -110,10 +115,25 @@ function normalise(raw, docs) {
     if (o.kind && o.id) db.todoist.linked[k] = { kind: str(o.kind), id: str(o.id), ...(o.week ? { week: str(o.week) } : {}) };
   });
   db.desk = src.desk && typeof src.desk === 'object' ? src.desk : null;
-  const S = obj(src.settings);
-  db.settings = { hotkeys: !!S.hotkeys, notify: S.notify !== false, window: oneOf(S.window, ['week', 'month', 'year', 'all'], 'week') };
+  const X = obj(src.session);
+  db.session = Number.isFinite(+X.start) && Number.isFinite(+X.phaseStart) ? {
+    start: +X.start, phase: oneOf(X.phase, PHASES, 'focus'), phaseStart: +X.phaseStart, running: !!X.running,
+    focusSec: Math.max(0, num(X.focusSec)), breakSec: Math.max(0, num(X.breakSec)), sinceBreak: Math.max(0, num(X.sinceBreak)),
+    breaks: Math.max(0, Math.round(num(X.breaks))), goalSec: within(X.goalSec / 60, 5, 720, SESSION.goalMin) * 60,
+    breakEvery: within(X.breakEvery / 60, 0, 240, SESSION.breakEvery) * 60, breakLen: within(X.breakLen / 60, 1, 120, SESSION.breakMin) * 60,
+    goalHit: !!X.goalHit } : null;
+  db.sessions = arr(src.sessions).filter(s => s && Number.isFinite(+s.start)).map(s => ({
+    start: +s.start, end: num(s.end, +s.start), focusSec: Math.max(0, Math.round(num(s.focusSec))),
+    goalSec: Math.max(0, num(s.goalSec)), breaks: Math.max(0, Math.round(num(s.breaks))) })).slice(-1000);
+  const S = obj(src.settings), SS = obj(S.session);
+  db.settings = { hotkeys: !!S.hotkeys, notify: S.notify !== false, window: oneOf(S.window, ['week', 'month', 'year', 'all'], 'week'),
+                  session: { goalMin: within(SS.goalMin, 5, 720, SESSION.goalMin), breakEvery: within(SS.breakEvery, 0, 240, SESSION.breakEvery),
+                             breakMin: within(SS.breakMin, 1, 120, SESSION.breakMin), notify: SS.notify !== false },
+                  flowExe: S.flowExe ? str(S.flowExe) : null };
   return db;
 }
+/* A whole number of minutes inside [lo, hi]; anything unreadable is the default. */
+function within(v, lo, hi, fb) { return v == null || v === '' || !Number.isFinite(+v) ? fb : Math.max(lo, Math.min(hi, Math.round(+v))); }
 
 /* ── Changing ─────────────────────────────────────────────────────────────
    apply(db, op, p, ctx) → { db, effects }. Unknown ops throw, so a typo in the
@@ -322,8 +342,68 @@ const OPS = {
     if (p.hotkeys != null) { db.settings.hotkeys = !!p.hotkeys; fx.push({ type: 'hotkeys' }); }
     if (p.notify != null) db.settings.notify = !!p.notify;
     if (p.window != null) db.settings.window = oneOf(p.window, ['week', 'month', 'year', 'all'], db.settings.window);
+    if (p.session) {
+      const S = db.settings.session, q = obj(p.session);
+      if (q.goalMin != null) S.goalMin = within(q.goalMin, 5, 720, S.goalMin);
+      if (q.breakEvery != null) S.breakEvery = within(q.breakEvery, 0, 240, S.breakEvery);
+      if (q.breakMin != null) S.breakMin = within(q.breakMin, 1, 120, S.breakMin);
+      if (q.notify != null) S.notify = !!q.notify;
+    }
+    if (p.flowExe !== undefined) db.settings.flowExe = str(p.flowExe).trim() || null;
+  },
+
+  /* The session clock: focus, breaks, a goal. The record holds when the
+     current phase began; main reads the clock from that, and these ops fold the
+     time in only on a change (pause, phase, end) — nothing is written once a
+     second. A session is not a CREATE session: it is not filed anywhere but
+     here, and nothing lights up when one ends short of its goal. */
+  'session.start'(db, p, ctx, fx) {
+    if (db.session) return;
+    const S = db.settings.session;
+    db.session = { start: ctx.now, phase: 'focus', phaseStart: ctx.now, running: true, focusSec: 0, breakSec: 0, sinceBreak: 0, breaks: 0,
+                   goalSec: within(p.goalMin, 5, 720, S.goalMin) * 60, breakEvery: within(p.breakEvery, 0, 240, S.breakEvery) * 60,
+                   breakLen: within(p.breakMin, 1, 120, S.breakMin) * 60, goalHit: false };
+    fx.push({ type: 'session' });
+  },
+  'session.pause'(db, p, ctx, fx) {
+    const s = db.session;
+    if (!s || !s.running) return;
+    fold(s, ctx.now); s.running = false;
+    fx.push({ type: 'session' });
+  },
+  'session.resume'(db, p, ctx, fx) {
+    const s = db.session;
+    if (!s || s.running) return;
+    s.running = true; s.phaseStart = ctx.now;
+    fx.push({ type: 'session' });
+  },
+  'session.phase'(db, p, ctx, fx) {
+    const s = db.session;
+    if (!s) return;
+    fold(s, ctx.now);
+    const to = oneOf(p.phase, PHASES, 'focus');
+    if (to === 'break' && s.phase === 'focus') s.breaks++;
+    if (to === 'focus') s.sinceBreak = 0;
+    s.phase = to; s.running = true; s.phaseStart = ctx.now;
+    fx.push({ type: 'session' });
+  },
+  'session.goal'(db) { if (db.session) db.session.goalHit = true; },
+  'session.end'(db, p, ctx, fx) {
+    const s = db.session;
+    if (!s) return;
+    fold(s, ctx.now);
+    if (s.focusSec >= 60) db.sessions = db.sessions.concat({ start: s.start, end: ctx.now, focusSec: Math.round(s.focusSec), goalSec: s.goalSec, breaks: s.breaks }).slice(-1000);
+    db.session = null;
+    fx.push({ type: 'session' }, { type: 'unlink' });
   },
 };
+
+/* Folds the time since the phase began into the session's counters. */
+function fold(s, now) {
+  const dt = s.running ? Math.max(0, (now - s.phaseStart) / 1000) : 0;
+  if (s.phase === 'focus') { s.focusSec += dt; s.sinceBreak += dt; } else s.breakSec += dt;
+  s.phaseStart = now;
+}
 
 /* Finishing something in GRIND closes the Todoist task it was sent as. */
 function closeLinked(db, kind, id, fx, week) {
@@ -351,5 +431,5 @@ function apply(db, op, p, ctx) {
   return { db: next, effects: fx };
 }
 
-module.exports = { VERSION, STAGES, PLATFORMS, KINDS, COLORS, AUDIO, PRESETS,
+module.exports = { VERSION, STAGES, PLATFORMS, KINDS, COLORS, AUDIO, PRESETS, SESSION,
                    blank, normalise, apply, postCounter, defaultCounters, OPS: Object.keys(OPS) };

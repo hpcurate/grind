@@ -38,8 +38,39 @@ svg{display:block;flex-shrink:0}
 .brand{display:flex;align-items:center;gap:10px;width:152px}
 .mark{width:24px;height:24px}
 .word{font:800 17px/1 var(--display);letter-spacing:.06em}
-.bar-mid{flex:1;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mu)}
-.bar-mid b{color:var(--fg2);font-weight:600}
+/* the middle of the title bar: the session pill first, the week at the far end */
+.bar-mid{flex:1;min-width:0;display:flex;align-items:center;gap:16px}
+.bar-week{margin-left:auto;padding-right:4px;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+  font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mu)}
+.bar-week b{color:var(--fg2);font-weight:600}
+
+/* the session bar — orange while you focus, teal on a break, grey when paused;
+   the thick bar fills to the goal, the thin one runs to the next break */
+.sess{display:flex;flex:0 1 auto;align-items:center;gap:10px;-webkit-app-region:no-drag;height:32px;padding:0 5px 0 12px;
+  border-radius:999px;background:var(--s1);border:1px solid var(--bd2);min-width:0}
+.sess .ph{font-size:10px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--mu);white-space:nowrap}
+.sess .ph i{display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--or);margin-right:7px;vertical-align:0}
+.sess.break .ph i{background:var(--te);border-radius:50%}
+.sess.paused .ph i{background:var(--mu2)}
+.sess .tm{font:700 13px/1 var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.sess .tm small{color:var(--mu);font-weight:500}
+.sess .bars{display:flex;flex-direction:column;gap:3px;width:clamp(80px,12vw,240px)}
+.sess .bars span{display:block;height:6px;border-radius:6px;background:var(--s3);overflow:hidden}
+.sess .bars span+span{height:3px}
+.sess .bars b{display:block;height:100%;width:0;background:var(--or);border-radius:6px;transition:width .9s linear}
+.sess .bars span+span b{background:var(--ye)}
+.sess.break .bars span b{background:var(--te)}
+.sess.paused .bars span b{background:var(--mu)}
+.sess .sub{font-size:10.5px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.sess .ib{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;color:var(--fg2);flex-shrink:0}
+.sess .ib:hover{background:var(--s3);color:var(--fg)}
+.sess .ib svg{width:14px;height:14px}
+.sess .ib.on{background:var(--or);color:var(--ink)}
+.sess .ib.wait{animation:sess-wait 1s ease-in-out infinite}
+@keyframes sess-wait{50%{opacity:.45}}
+.sess .go{height:24px;padding:0 12px;border-radius:999px;background:var(--fg);color:var(--ink);font-weight:700;font-size:11px;white-space:nowrap;flex-shrink:0}
+.sess .go:hover{background:#fff}
+@media (max-width:1240px){ .bar-week{display:none} }
 .win{display:flex;height:100%;-webkit-app-region:no-drag}
 .win button{width:46px;height:100%;display:grid;place-items:center;color:var(--mu)}
 .win button svg{width:12px;height:12px}

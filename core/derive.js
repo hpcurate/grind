@@ -169,6 +169,26 @@
     return out.join('\n');
   }
 
+  /* The live session read off the clock: focus so far, the time to the next
+     break (or, in a break, back to focus), and how full the goal is. main uses
+     it for FLOW and the alarms, the bar for what it draws. */
+  function sessionView(s, now) {
+    if (!s) return null;
+    const dt = s.running ? Math.max(0, (now - s.phaseStart) / 1000) : 0;
+    const focus = s.focusSec + (s.phase === 'focus' ? dt : 0), since = s.sinceBreak + (s.phase === 'focus' ? dt : 0);
+    const v = { phase: s.phase, running: s.running, focus, since, goal: s.goalSec, breakEvery: s.breakEvery, breaks: s.breaks,
+                goalP: Math.min(1, focus / Math.max(1, s.goalSec)), left: null, total: null, nextP: null };
+    if (s.phase === 'break') { v.left = Math.max(0, s.breakLen - dt); v.total = s.breakLen; v.nextP = 1 - v.left / Math.max(1, s.breakLen); }
+    else if (s.breakEvery > 0) { v.left = Math.max(0, s.breakEvery - since); v.total = s.breakEvery; v.nextP = since / s.breakEvery; }
+    else { v.left = Math.max(0, s.goalSec - focus); v.total = s.goalSec; }
+    return v;
+  }
+  /* Minutes of focus in finished sessions that started in [from, to). */
+  function focusMinutes(db, from, to) {
+    return (db.sessions || []).filter(s => s.start >= from && s.start < to).reduce((t, s) => t + (s.focusSec || 0), 0) / 60;
+  }
+
   return { DAY, startOfDay, startOfWeek, startOfMonth, startOfYear, addDays, weekKey, isoDate, parseDate,
-           counterStats, goalProgress, learnProgress, currentLesson, weekChallenge, ago, askText, hash };
+           counterStats, goalProgress, learnProgress, currentLesson, weekChallenge, ago, askText, hash,
+           sessionView, focusMinutes };
 });

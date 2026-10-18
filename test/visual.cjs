@@ -12,6 +12,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const assert = require('assert/strict');
+const net = require('net');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grind-ui-'));
 const profile = path.join(root, 'profile'), docs = path.join(root, 'Documents');
@@ -26,6 +27,7 @@ fs.mkdirSync(profile, { recursive: true });
 app.setPath('userData', profile);
 process.env.GRIND_DOCS = docs;
 process.env.GRIND_NO_NET = '1';
+process.env.GRIND_FLOW_PIPE = '\\\\.\\pipe\\grind-test-' + process.pid;   // a stand-in FLOW listens here; the real one is never launched
 
 const errors = [];
 app.on('web-contents-created', (_, wc) => {
@@ -33,7 +35,7 @@ app.on('web-contents-created', (_, wc) => {
   wc.on('did-fail-load', (_e, code, desc) => errors.push(`${code}: ${desc}`));
 });
 
-require('../main.js');
+const M = require('../main.js');
 const copied = [], opened = [];
 ipcMain.removeHandler('clip'); ipcMain.handle('clip', (_e, t) => { copied.push(String(t)); return true; });
 ipcMain.removeHandler('open-url'); ipcMain.handle('open-url', (_e, u) => { opened.push(String(u)); });
@@ -79,7 +81,7 @@ app.whenReady().then(async () => {
     const num = c => js(`+(document.querySelector('[data-tile="${c}"] .tile-num') || {}).textContent`);
     const file = () => JSON.parse(fs.readFileSync(path.join(profile, 'grind.json'), 'utf8'));
     const db = () => js(`window.grindAPI.state().then(s => s.db)`);
-    await js(`window.grindAPI.op('settings.set', { notify: false })`);
+    await js(`window.grindAPI.op('settings.set', { notify: false, session: { notify: false } })`);
     await js(`localStorage.setItem('grind.view','home'); 0`);
     await click('[data-go="home"]');
 
@@ -208,6 +210,89 @@ app.whenReady().then(async () => {
       assert.match(await text('.set'), /network off/);
       await shot('7-settings');
       await fit('settings');
+    });
+
+    await check('the session bar: start, pause, a break on the clock and by hand, end', async () => {
+      await click('[data-go="home"]');
+      assert.match(await text('#sess'), /2h goal · break every 50 min/);
+      await click('[data-act="sess-start"]');
+      await until(`!!document.getElementById('ss-tm')`);
+      assert.equal(await text('#ss-ph'), 'focus');
+      assert.match(await text('#ss-sub'), /^break in (50:00|49:5\d)$/);
+      await shot('9-session');
+      await click('[data-act="sess-toggle"]');
+      await until(`document.getElementById('sess').classList.contains('paused')`, 4000, 'paused');
+      await click('[data-act="sess-toggle"]');
+      await until(`!document.getElementById('sess').classList.contains('paused')`, 4000, 'resumed');
+      M._test.db.session.sinceBreak = 3000;              // fifty minutes of focus behind it: main's clock calls the break
+      M._test.sessionTick();
+      await until(`document.getElementById('sess').classList.contains('break')`, 4000, 'the break, on the clock');
+      assert.equal((await db()).session.breaks, 1);
+      assert.match(await text('#ss-sub'), /^back in (10:00|9:5\d)$/);
+      await shot('9-session-break');
+      await click('[data-act="sess-skip"]');
+      await until(`!document.getElementById('sess').classList.contains('break')`, 4000, 'back to focus');
+      win.setBounds({ width: 1000, height: 680 }); await pause(500);
+      await fit('the running session bar at the minimum size');
+      const gap = await js(`(() => { const s = document.getElementById('sess').getBoundingClientRect(), w = document.querySelector('.win').getBoundingClientRect(), b = document.querySelector('.brand').getBoundingClientRect(); return [w.left - s.right, s.left - b.right]; })()`);
+      assert.ok(gap[0] >= 8 && gap[1] >= 8, 'the pill clears the brand and the window buttons: ' + gap);
+      await shot('9-session-min');
+      win.setBounds({ width: 1280, height: 840 }); await pause(400);
+      M._test.db.session.focusSec = 1800;                // half an hour in: ending asks first
+      M._test.commit('settings.set', {});                // (a no-op op, for the broadcast)
+      await until(`window.grindAPI && document.getElementById('ss-tm').textContent.startsWith('30:')`, 4000, 'the bar shows 30 min');
+      await click('[data-act="sess-end"]');
+      assert.match(await text('.sheet'), /30 min of focus\./);
+      await click('[data-act="confirm-yes"]');
+      await until(`!document.getElementById('ss-tm')`, 4000, 'idle again');
+      const d = await db();
+      assert.equal(d.session, null);
+      assert.equal(d.sessions.length, 1); assert.ok(d.sessions[0].focusSec >= 1800);
+      assert.match(await text('#sess'), /30 min this week/);
+    });
+
+    await check('the FLOW link: a stand-in FLOW gets the session and its buttons drive the clock', async () => {
+      const got = []; let sock = null;
+      const server = net.createServer(s => {
+        sock = s; let buf = '';
+        s.setEncoding('utf8'); s.on('error', () => {});
+        s.on('data', d => {
+          buf += d; let i;
+          while ((i = buf.indexOf('\n')) >= 0) {
+            const l = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+            if (!l) continue;
+            const m = JSON.parse(l); got.push(m);
+            if (m.t === 'hello') s.write(JSON.stringify({ t: 'hello', app: 'FLOW', v: 1 }) + '\n');
+          }
+        });
+      });
+      await new Promise(r => server.listen(process.env.GRIND_FLOW_PIPE, r));
+      const say = m => sock.write(JSON.stringify(m) + '\n');
+      const heard = async (fn, what) => { const end = Date.now() + 4000; while (!fn()) { if (Date.now() > end) throw new Error(what + ': ' + JSON.stringify(got.slice(-4))); await pause(100); } };
+      const linkOn = `!!document.querySelector('#sess [data-act="sess-link"].on')`;
+      try {
+        await click('[data-act="sess-link"]');              // idle: linking starts a session
+        await until(`${linkOn} && !!document.getElementById('ss-tm')`, 8000, 'linked');
+        assert.deepEqual(got.slice(0, 2), [{ t: 'hello', app: 'GRIND', v: 1 }, { t: 'show' }]);
+        await heard(() => got.some(m => m.t === 'session' && m.phase === 'focus' && m.running === true && m.label === 'GRIND'), 'the session went to FLOW');
+        assert.match(await text('#rail-foot'), /linked to FLOW/);
+        await shot('10-linked');
+        say({ t: 'cmd', cmd: 'toggle' });
+        await until(`document.getElementById('sess').classList.contains('paused')`, 4000, 'paused from FLOW');
+        await heard(() => got.some(m => m.t === 'session' && m.running === false), 'the pause went back to FLOW');
+        say({ t: 'cmd', cmd: 'toggle' }); say({ t: 'cmd', cmd: 'skip' });
+        await until(`document.getElementById('sess').classList.contains('break')`, 4000, 'break from FLOW');
+        await heard(() => got.some(m => m.t === 'session' && m.phase === 'break'), 'the break went to FLOW');
+        say({ t: 'bye' });                                   // FLOW unlinked (or another app took it over)
+        await until(`!${linkOn}`, 4000, 'unlinked by FLOW');
+        assert.ok((await db()).session, 'the session keeps running when FLOW goes');
+        got.length = 0;
+        await click('[data-act="sess-link"]');
+        await until(linkOn, 8000, 'linked again');
+        await js(`window.grindAPI.op('session.end')`);
+        await heard(() => got.some(m => m.t === 'bye'), 'ending the session unlinks FLOW');
+        await until(`!${linkOn} && !document.getElementById('ss-tm')`, 4000, 'idle and unlinked');
+      } finally { try { sock && sock.destroy(); } catch {} server.close(); }
     });
 
     await check('home still fits at the minimum window size', async () => {

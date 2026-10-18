@@ -401,6 +401,53 @@ test('fetchDesk says so when root has not synced CREATE yet', async () => {
 });
 
 /* ── curriculum ── */
+/* ── the session clock ── */
+test('a session runs focus → break → focus and files its minutes when it ends', () => {
+  const M = 60000;
+  let db = fresh(), r;
+  assert.deepEqual(db.settings.session, { goalMin: 120, breakEvery: 50, breakMin: 10, notify: true });
+  r = run(db, 'session.start', {}, NOW); db = r.db;
+  assert.deepEqual(r.effects, [{ type: 'session' }]);
+  assert.equal(db.session.goalSec, 7200); assert.equal(db.session.breakEvery, 3000); assert.equal(db.session.breakLen, 600);
+  assert.equal(run(db, 'session.start', { goalMin: 30 }, NOW + M).db.session.goalSec, 7200, 'a second start leaves the running one alone');
+  let v = D.sessionView(db.session, NOW + 20 * M);
+  assert.equal(Math.round(v.focus), 1200); assert.equal(Math.round(v.left), 1800); assert.equal(v.phase, 'focus');
+  db = run(db, 'session.pause', {}, NOW + 20 * M).db;
+  v = D.sessionView(db.session, NOW + 90 * M);
+  assert.equal(Math.round(v.focus), 1200, 'paused time is not focus');
+  db = run(db, 'session.resume', {}, NOW + 90 * M).db;
+  db = run(db, 'session.phase', { phase: 'break' }, NOW + 120 * M).db;
+  assert.equal(db.session.breaks, 1); assert.equal(Math.round(db.session.focusSec), 3000);
+  v = D.sessionView(db.session, NOW + 124 * M);
+  assert.equal(v.phase, 'break'); assert.equal(Math.round(v.left), 360); assert.equal(Math.round(v.focus), 3000, 'a break is not focus');
+  db = run(db, 'session.phase', { phase: 'focus' }, NOW + 130 * M).db;
+  assert.equal(db.session.sinceBreak, 0);
+  r = run(db, 'session.end', {}, NOW + 140 * M); db = r.db;
+  assert.equal(db.session, null);
+  assert.deepEqual(r.effects.map(e => e.type), ['session', 'unlink']);
+  assert.equal(db.sessions.length, 1); assert.equal(db.sessions[0].focusSec, 3600); assert.equal(db.sessions[0].breaks, 1);
+  assert.equal(D.focusMinutes(db, D.startOfWeek(NOW), NOW + 200 * M), 60);
+  db = run(run(db, 'session.start', {}, NOW + 200 * M).db, 'session.end', {}, NOW + 200 * M + 30000).db;
+  assert.equal(db.sessions.length, 1, 'under a minute of focus is not filed');
+});
+
+test('session settings are clamped, and a session on disk survives a reload', () => {
+  let db = run(fresh(), 'settings.set', { session: { goalMin: '90', breakEvery: 0, breakMin: 999 }, flowExe: '  C:\\x\\FLOW.exe ' }).db;
+  assert.deepEqual(db.settings.session, { goalMin: 90, breakEvery: 0, breakMin: 120, notify: true });
+  assert.equal(db.settings.flowExe, 'C:\\x\\FLOW.exe');
+  db = run(db, 'session.start', {}, NOW).db;
+  const v = D.sessionView(db.session, NOW + 600000);
+  assert.equal(v.breakEvery, 0); assert.equal(v.nextP, null); assert.equal(Math.round(v.left), 90 * 60 - 600, 'no breaks: it counts down to the goal');
+  const back = Store.normalise(JSON.parse(JSON.stringify(db)), docs);
+  assert.deepEqual(back.session, db.session);
+  assert.deepEqual(back.settings, db.settings);
+  const junk = Store.normalise({ session: { start: 'x' }, sessions: [null, { start: 5, focusSec: -3 }], settings: { session: { goalMin: 'lots' } } }, docs);
+  assert.equal(junk.session, null);
+  assert.deepEqual(junk.sessions, [{ start: 5, end: 5, focusSec: 0, goalSec: 0, breaks: 0 }]);
+  assert.equal(junk.settings.session.goalMin, 120);
+  assert.equal(junk.settings.flowExe, null);
+});
+
 test('the curriculum is whole: unique ids, real tracks, a drill on every lesson', () => {
   const ids = new Set();
   C.lessons.forEach(l => {

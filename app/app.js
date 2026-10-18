@@ -87,11 +87,74 @@
   function renderChrome() {
     document.querySelectorAll('#rail [data-go]').forEach(b => b.classList.toggle('on', b.dataset.go === view));
     const now = Date.now(), w0 = D.startOfWeek(now);
-    $('#bar-mid').innerHTML = `<b>week ${esc(D.weekKey(now).slice(6))}</b> · ${esc(day(w0))} – ${esc(day(D.addDays(w0, 6)))}`;
+    $('#bar-week').innerHTML = `<b>week ${esc(D.weekKey(now).slice(6))}</b> · ${esc(day(w0))} – ${esc(day(D.addDays(w0, 6)))}`;
     const td = S.status.todoist;
     const dot = td.busy ? 'busy' : td.hasToken && td.ok !== false ? 'ok' : '';
     const tdTxt = !td.hasToken ? 'todoist off' : td.busy ? 'todoist…' : td.error ? 'todoist: check settings' : 'todoist on';
-    $('#rail-foot').innerHTML = `<div><span class="dot ${dot}"></span>${esc(tdTxt)}</div><div>v${esc(S.status.version)}</div>`;
+    $('#rail-foot').innerHTML = `<div><span class="dot ${dot}"></span>${esc(tdTxt)}</div><div>${S.status.flow === 'on' ? 'linked to FLOW · ' : ''}v${esc(S.status.version)}</div>`;
+    renderSess();
+  }
+
+  /* ── the session bar (title bar) ──
+     Redrawn every second from db.session and the clock, without asking main.
+     Its markup is rebuilt only when what it shows changes shape (phase,
+     paused, linked…), so a button under the pointer stays put while it ticks. */
+  const SVG = d => `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const ICON = {
+    play: '<svg viewBox="0 0 16 16"><path d="M5 3.2v9.6L12.6 8z" fill="currentColor"/></svg>',
+    pause: '<svg viewBox="0 0 16 16"><rect x="4" y="3.2" width="2.8" height="9.6" rx="1" fill="currentColor"/><rect x="9.2" y="3.2" width="2.8" height="9.6" rx="1" fill="currentColor"/></svg>',
+    stop: '<svg viewBox="0 0 16 16"><rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor"/></svg>',
+    skip: SVG('<path d="M4 3.5l6 4.5-6 4.5zM12 3.5v9"/>'),
+    link: SVG('<path d="M6.6 9.4l2.8-2.8"/><path d="M7.4 4.6l1.1-1.1a2.9 2.9 0 014.1 4.1l-1.1 1.1"/><path d="M8.6 11.4l-1.1 1.1a2.9 2.9 0 01-4.1-4.1l1.1-1.1"/>'),
+  };
+  const p2 = n => String(n).padStart(2, '0');
+  const clock = sec => { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60; return h ? `${h}:${p2(m)}:${p2(s)}` : `${m}:${p2(s)}`; };
+  const hm = min => { min = Math.round(min); const h = Math.floor(min / 60), m = min % 60; return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m} min`; };
+  const flowOn = () => S.status.flow === 'on' || S.status.flow === 'connecting';
+  let sessKey = '', progSent = null;
+  function renderSess() {
+    if (!S) return;
+    const el = $('#sess'), now = Date.now(), cfg = S.db.settings.session;
+    const v = D.sessionView(S.db.session, now), linked = flowOn();
+    const linkBtn = `<button class="ib ${linked ? 'on' : ''}${S.status.flow === 'connecting' ? ' wait' : ''}" data-act="sess-link" title="${linked ? 'linked to FLOW — click to unlink' : 'link to FLOW'}">${ICON.link}</button>`;
+    if (!v) {
+      const wk = D.focusMinutes(S.db, D.startOfWeek(now), now + 1);
+      const sub = `${hm(cfg.goalMin)} goal${cfg.breakEvery ? ` · break every ${cfg.breakEvery} min` : ''}${wk >= 1 ? ` · ${hm(wk)} this week` : ''}`;
+      const key = ['idle', linked, S.status.flow, sub].join();
+      if (key !== sessKey) {
+        sessKey = key;
+        el.className = 'sess';
+        el.innerHTML = `<span class="ph"><i></i>session</span><span class="sub">${esc(sub)}</span>
+          <button class="go" data-act="sess-start">start</button>${linkBtn}`;
+      }
+      progress(-1);
+      return;
+    }
+    const key = [v.phase, v.running, linked, S.status.flow, v.breakEvery > 0].join();
+    if (key !== sessKey) {
+      sessKey = key;
+      el.className = 'sess' + (v.phase === 'break' ? ' break' : '') + (v.running ? '' : ' paused');
+      el.innerHTML = `<span class="ph"><i></i><span id="ss-ph"></span></span><span class="tm" id="ss-tm"></span>
+        <span class="bars" title="the session goal · and the time to your next break"><span><b id="ss-goal"></b></span>${v.breakEvery > 0 || v.phase === 'break' ? '<span><b id="ss-next"></b></span>' : ''}</span>
+        <span class="sub" id="ss-sub"></span>
+        <button class="ib" data-act="sess-toggle" title="${v.running ? 'pause' : 'resume'}">${v.running ? ICON.pause : ICON.play}</button>
+        <button class="ib" data-act="sess-skip" title="${v.phase === 'break' ? 'end the break' : 'take a break now'}">${ICON.skip}</button>
+        <button class="ib" data-act="sess-end" title="end the session">${ICON.stop}</button>${linkBtn}`;
+    }
+    const set = (id, t) => { const e = document.getElementById(id); if (e) e.textContent = t; };
+    set('ss-ph', v.phase === 'break' ? 'break' : v.running ? 'focus' : 'paused');
+    $('#ss-tm').innerHTML = `${clock(v.focus)}<small> / ${clock(v.goal)}</small>`;
+    $('#ss-goal').style.width = (v.goalP * 100).toFixed(1) + '%';
+    const n = document.getElementById('ss-next'); if (n && v.nextP != null) n.style.width = (v.nextP * 100).toFixed(1) + '%';
+    set('ss-sub', v.phase === 'break' ? `back in ${clock(v.left)}` : v.breakEvery > 0 ? `break in ${clock(v.left)}` : v.goalP >= 1 ? 'goal reached' : '');
+    progress(v.goalP);
+  }
+  /* The taskbar button fills with the goal too — sent only when it moves. */
+  function progress(p) {
+    const q = p < 0 ? -1 : Math.round(p * 500) / 500;
+    if (q === progSent) return;
+    progSent = q;
+    bridge.progress(q);
   }
 
   /* ── HOME ── */
@@ -502,6 +565,24 @@
           <div class="status-line ${st.desk.error ? 'err' : ''}">${st.desk.error ? esc(st.desk.error) : db.desk ? 'read ' + esc(D.ago(db.desk.fetched, Date.now())) + ' · root synced ' + esc(D.ago(db.desk.written, Date.now())) : 'not read yet'}</div>
         </div>
 
+        <div class="card"><h3>Session</h3>
+          <div class="sub">The bar at the top fills towards the goal; the thin one under it runs to the next break and starts over after it. Its minutes stay here — it is not a CREATE session, and ending one early lights nothing.</div>
+          <div class="kv">
+            <label>goal (min)</label><input type="number" id="cfg-goalMin" min="5" max="720" step="5" value="${db.settings.session.goalMin}" data-change="session" data-f="goalMin">
+            <label>break every (min, 0 = none)</label><input type="number" id="cfg-breakEvery" min="0" max="240" step="5" value="${db.settings.session.breakEvery}" data-change="session" data-f="breakEvery">
+            <label>break length (min)</label><input type="number" id="cfg-breakMin" min="1" max="120" value="${db.settings.session.breakMin}" data-change="session" data-f="breakMin">
+          </div>
+          <label class="toggle" style="margin-top:10px"><input type="checkbox" data-change="session-notify" ${db.settings.session.notify ? 'checked' : ''}><span class="sw"></span>a notification with sound when a break starts and ends</label>
+          <div class="status-line">${db.session ? 'A session is running — changes apply from the next one.' : 'Changes apply from the next session.'}</div>
+        </div>
+
+        <div class="card"><h3>FLOW</h3>
+          <div class="sub">The link button in the session bar opens FLOW and ties it to the session: FLOW's timer shows GRIND's, its music pauses on your breaks, and it wears a GRIND chip. FLOW's play and skip buttons drive the session from there. One app at a time — linking TUTOR takes FLOW over.</div>
+          <div class="kv"><label>FLOW.exe</label><div class="row"><input type="text" id="fx-path" value="${esc(db.settings.flowExe || '')}" data-change="flowExe" placeholder="default: Documents\\github\\flow\\dist\\FLOW-win32-x64\\FLOW.exe" style="flex:1;min-width:0">
+            <button class="btn ghost sm" data-act="pick-flow" title="pick FLOW.exe">…</button></div></div>
+          <div class="status-line">${{ on: 'linked', connecting: 'linking…', lost: 'FLOW closed — not linked', off: 'not linked' }[st.flow] || 'not linked'}</div>
+        </div>
+
         <div class="card"><h3>Learning</h3>
           <div class="sub">Which DAW the lessons open on. Every lesson keeps both — switch any time.</div>
           <div class="seg"><button data-act="learn-daw" data-daw="fl" class="${db.learn.daw === 'fl' ? 'on' : ''}">FL Studio</button>
@@ -706,6 +787,26 @@
       case 'export': { const r = await bridge.exportData(); if (r && r.ok) toast('exported'); break; }
       case 'data-folder': bridge.openData(); break;
 
+      case 'sess-start': op('session.start', {}); break;
+      case 'sess-toggle': { const s = S.db.session; if (s) op(s.running ? 'session.pause' : 'session.resume'); break; }
+      case 'sess-skip': { const s = S.db.session; if (s) op('session.phase', { phase: s.phase === 'focus' ? 'break' : 'focus' }); break; }
+      case 'sess-end': {
+        const v = D.sessionView(S.db.session, Date.now());
+        if (!v) break;
+        const tail = flowOn() ? ' — and FLOW is unlinked.' : '.';
+        if (v.focus >= 60) confirmBox('End the session?', `${hm(v.focus / 60)} of focus${tail}`, 'end it', () => op('session.end'));
+        else op('session.end');
+        break;
+      }
+      case 'sess-link': {
+        const on = flowOn();
+        const r = await bridge.flowLink(!on);
+        if (r && !r.ok) toast(r.error || 'that did not work');
+        else toast(on ? 'unlinked from FLOW' : 'linking to FLOW…');
+        break;
+      }
+      case 'pick-flow': { const p = await bridge.pickExe(); if (p) op('settings.set', { flowExe: p }); break; }
+
       case 'm-close': closeModal(); break;
       case 'confirm-yes': { const fn = ui.confirm; closeModal(); if (fn) await fn(); break; }
     }
@@ -718,6 +819,9 @@
     else if (d.change === 'exts') op('source.update', { c: d.c, i: +d.i, exts: el.value.split(/[\s,]+/).filter(Boolean) });
     else if (d.change === 'hotkeys') op('settings.set', { hotkeys: el.checked });
     else if (d.change === 'notify') op('settings.set', { notify: el.checked });
+    else if (d.change === 'session') op('settings.set', { session: { [d.f]: el.value } });
+    else if (d.change === 'session-notify') op('settings.set', { session: { notify: el.checked } });
+    else if (d.change === 'flowExe') op('settings.set', { flowExe: el.value });
   });
 
   const noteT = {};
@@ -751,4 +855,5 @@
   /* "x min ago" and the week line move on their own; a rebuild a minute keeps
      them honest, skipped while something is being typed. */
   setInterval(() => { if (S && modal.hidden && !typing()) render(); }, 60 * 1000);
+  setInterval(renderSess, 1000);
 })();

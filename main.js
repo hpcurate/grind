@@ -1,14 +1,16 @@
 /* GRIND · main process.
 
    Owns the record (userData/grind.json), the folder watchers, the Todoist
-   token and every network call. The renderer only ever asks: it sends ops
-   through IPC, main runs them through core/store.js, saves, carries out the
-   effects and broadcasts the new state. Closing the window hides it to the
-   tray so the watchers and the hotkeys keep working; Quit is in the tray menu.
+   token and every network call, the session clock and the FLOW link. The
+   renderer only ever asks: it sends ops through IPC, main runs them through
+   core/store.js, saves, carries out the effects and broadcasts the new state.
+   Closing the window hides it to the tray so the watchers, the hotkeys and
+   the session clock keep working; Quit is in the tray menu.
 
    Test hooks: GRIND_DOCS stands in for the Documents folder, GRIND_NO_NET
    switches every network call off, GRIND_USERDATA points the record at a
-   throwaway profile (used to smoke-test the packed exe). */
+   throwaway profile (used to smoke-test the packed exe), GRIND_FLOW_PIPE puts
+   the FLOW link on a private pipe (and FLOW is never launched). */
 'use strict';
 
 const { app, BrowserWindow, Tray, Menu, ipcMain, screen, dialog, shell, clipboard,
@@ -22,6 +24,7 @@ const Store = require('./core/store');
 const Files = require('./core/files');
 const Todoist = require('./core/todoist');
 const RootLink = require('./core/rootlink');
+const FlowLink = require('./core/flowlink');
 const Derive = require('./core/derive');
 const C = require('./app/curriculum');
 
@@ -33,6 +36,7 @@ const DB_FILE = path.join(DATA, 'grind.json');
 const TOKEN_FILE = path.join(DATA, 'todoist.bin');
 const WIN_FILE = path.join(DATA, 'win-state.json');
 const ICON = path.join(__dirname, 'build', 'icon.ico');
+const FLOW_EXE = path.join(DOCS, 'github', 'flow', 'dist', 'FLOW-win32-x64', 'FLOW.exe');
 
 const MIN = 60 * 1000;
 const SCAN_EVERY = 5 * MIN, POLL_EVERY = 10 * MIN, DESK_EVERY = 30 * MIN;
@@ -51,6 +55,7 @@ const status = {
   sources: {},
   todoist: { hasToken: false, ok: null, error: '', busy: false },
   desk: { busy: false, error: '' },
+  flow: 'off',                  // the FLOW link: off · connecting · on · lost
 };
 
 const ctx = () => ({ now: Date.now(), id: p => p + '_' + Date.now().toString(36) + '_' + (uid++).toString(36) });
@@ -115,7 +120,61 @@ function effects(list) {
     else if (fx.type === 'watch') setImmediate(rewatch);
     else if (fx.type === 'hotkeys') setImmediate(registerHotkeys);
     else if (fx.type === 'closeTask') closeTask(fx.id);
+    else if (fx.type === 'session') { flowUpdate(); refreshTray(); }
+    else if (fx.type === 'unlink') unlinkFlow();
   });
+}
+
+/* ── The session clock ────────────────────────────────────────────────────
+   The record keeps when the phase began; this reads the clock once a second
+   and changes the record only when something happens — the goal is reached,
+   a break is due, a break is over. Those are worth a sound: a break nobody
+   hears is no break. Counting stays silent. */
+function sessionTick() {
+  const s = db && db.session;
+  if (!s || !s.running) return;
+  const v = Derive.sessionView(s, Date.now());
+  if (s.phase === 'focus') {
+    if (!s.goalHit && v.focus >= s.goalSec) { commit('session.goal'); sessionNotify('Session goal reached', `${Math.round(s.goalSec / 60)} minutes of focus — keep going or end the session.`); }
+    if (s.breakEvery > 0 && v.since >= s.breakEvery) { commit('session.phase', { phase: 'break' }); sessionNotify('Break', `${Math.round(s.breakLen / 60)} minutes — stand up, rest your ears, look away from the screen.`); }
+  } else if (v.left <= 0) { commit('session.phase', { phase: 'focus' }); sessionNotify('Back to it', 'The break is over.'); }
+}
+function sessionNotify(title, body) {
+  if (!db.settings.session.notify || !Notification.isSupported()) return;
+  try { new Notification({ title, body, silent: false, icon: ICON }).show(); } catch {}
+}
+
+/* ── The FLOW link (core/flowlink.js) ─────────────────────────────────────
+   GRIND is the clock, FLOW follows: its timer shows this session, its music
+   pauses on the breaks. FLOW's own timer buttons come back as commands. */
+let unlinking = false;
+const flow = FlowLink.create({
+  exe: () => (process.env.GRIND_FLOW_PIPE ? null : db.settings.flowExe || FLOW_EXE),
+  onState: (s, was) => {
+    status.flow = s;
+    if (s === 'on') flowUpdate();
+    if (was === 'on' && s !== 'on' && !unlinking) toast(s === 'lost' ? 'FLOW closed — unlinked' : 'FLOW unlinked');
+    broadcast();
+  },
+  onMessage: m => {
+    if (m.t === 'error') { toast(m.msg); return; }
+    if (m.t !== 'cmd') return;
+    if (m.cmd === 'toggle') commit(!db.session ? 'session.start' : db.session.running ? 'session.pause' : 'session.resume');
+    else if (m.cmd === 'skip' && db.session) commit('session.phase', { phase: db.session.phase === 'focus' ? 'break' : 'focus' });
+    else if (m.cmd === 'end' && db.session) commit('session.end');
+  },
+});
+function flowUpdate() {
+  if (!flow.connected) return;
+  const v = Derive.sessionView(db.session, Date.now());
+  flow.update(v ? { t: 'session', phase: v.phase, running: v.running, left: Math.round(v.left), total: Math.round(v.total),
+                    focus: Math.round(v.focus), goal: v.goal, label: 'GRIND' }
+                : { t: 'session', phase: 'idle', running: false, label: 'GRIND' });
+}
+function unlinkFlow() {
+  if (flow.state === 'off') return;
+  unlinking = true;
+  try { flow.close(); } finally { unlinking = false; }
 }
 
 /* ── Counting files ───────────────────────────────────────────────────── */
@@ -344,14 +403,20 @@ function createWindow() {
 }
 
 function trayMenu() {
+  const s = db.session;
   return Menu.buildFromTemplate([
     { label: 'Show GRIND', click: showWin },
+    { type: 'separator' },
+    { label: !s ? 'Start a session' : s.running ? 'Pause the session' : 'Resume the session',
+      click: () => commit(!db.session ? 'session.start' : db.session.running ? 'session.pause' : 'session.resume') },
+    ...(s ? [{ label: 'End the session', click: () => commit('session.end') }] : []),
     { type: 'separator' },
     ...db.counters.map(c => ({ label: `+1 ${c.noun}`, click: () => { commit('tap', { c: c.id, via: 'tap' }); } })),
     { type: 'separator' },
     { label: 'Quit GRIND', click: () => { app.isQuitting = true; app.quit(); } },
   ]);
 }
+function refreshTray() { if (tray && !tray.isDestroyed()) tray.setContextMenu(trayMenu()); }
 function showWin() { if (!win) return; if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
 function createTray() {
   tray = new Tray(ICON);
@@ -375,16 +440,18 @@ app.whenReady().then(() => {
   setInterval(poll, POLL_EVERY);
   setInterval(refreshDesk, DESK_EVERY);
   setTimeout(() => { poll(); refreshDesk(); }, 2500);
+  setInterval(sessionTick, 1000);
+  setInterval(flowUpdate, 2000);          // keeps FLOW's countdown honest between changes
 });
 
-app.on('before-quit', () => { app.isQuitting = true; writeWin(); if (db) writeNow(); });
+app.on('before-quit', () => { app.isQuitting = true; writeWin(); unlinkFlow(); if (db) writeNow(); });
 app.on('will-quit', () => { globalShortcut.unregisterAll(); for (const w of watchers.values()) { try { w.close(); } catch {} } });
 app.on('window-all-closed', () => { /* the tray keeps GRIND alive */ });
 
 /* ── IPC ──────────────────────────────────────────────────────────────── */
 ipcMain.handle('state', () => snapshot());
 ipcMain.handle('op', (_e, op, payload) => {
-  try { commit(op, payload); if (op.startsWith('counter.')) tray && tray.setContextMenu(trayMenu()); return { ok: true }; }
+  try { commit(op, payload); if (op.startsWith('counter.')) refreshTray(); return { ok: true }; }
   catch (e) { return { ok: false, error: e.message || String(e) }; }
 });
 ipcMain.handle('scan', () => { rewatch(); scanAll(); return { ok: true }; });
@@ -401,6 +468,19 @@ ipcMain.handle('open-path', (_e, p) => {
   const allowed = p === DATA || db.counters.some(c => c.sources.some(s => s.path === p));
   return allowed && Files.isDir(p) ? shell.openPath(p) : 'not allowed';
 });
+ipcMain.handle('pick-exe', async () => {
+  const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'App', extensions: ['exe'] }] });
+  return r.canceled ? null : r.filePaths[0];
+});
+/* The link button: linking with no session running starts one — FLOW has
+   nothing to follow otherwise. Unlinking leaves the session running. */
+ipcMain.handle('flow:link', (_e, on) => {
+  if (on) { if (!db.session) commit('session.start'); flow.open(); }
+  else unlinkFlow();
+  broadcast();
+  return { ok: true };
+});
+ipcMain.on('win:progress', (_e, v) => { if (win && !win.isDestroyed()) win.setProgressBar(v == null || v < 0 ? -1 : Math.min(1, Math.max(0, v))); });
 ipcMain.handle('open-url', (_e, u) => { if (/^https:\/\//.test(String(u))) shell.openExternal(String(u)); });
 ipcMain.handle('clip', (_e, text) => { clipboard.writeText(String(text || '')); return true; });
 ipcMain.handle('todoist:token', async (_e, token) => {
@@ -442,4 +522,4 @@ ipcMain.on('win:min', () => win && win.minimize());
 ipcMain.on('win:max', () => { if (!win) return; if (win.isMaximized()) win.unmaximize(); else win.maximize(); });
 ipcMain.on('win:close', () => { if (win) { writeWin(); win.hide(); } });
 
-module.exports = { _test: { get db() { return db; }, scanAll, commit, status } };
+module.exports = { _test: { get db() { return db; }, scanAll, commit, status, sessionTick } };

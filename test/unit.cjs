@@ -431,6 +431,16 @@ test('a session runs focus → break → focus and files its minutes when it end
   assert.equal(db.sessions.length, 1, 'under a minute of focus is not filed');
 });
 
+test("an open session handed over from FLOW's pill keeps its start and its minutes", () => {
+  const M = 60000;
+  let db = run(fresh(), 'session.start', { carry: { start: NOW - 30 * M, focusSec: 1500, sinceBreak: 1500 } }, NOW).db;
+  assert.equal(db.session.start, NOW - 30 * M); assert.equal(db.session.focusSec, 1500); assert.equal(db.session.sinceBreak, 1500);
+  const v = D.sessionView(db.session, NOW + 10 * M);
+  assert.equal(Math.round(v.focus), 2100); assert.equal(Math.round(v.left), 900, "the next break counts from the open session's last one");
+  db = run(fresh(), 'session.start', { carry: { start: NOW + 5 * M, focusSec: -4, sinceBreak: 'x' } }, NOW).db;
+  assert.equal(db.session.start, NOW, 'a start in the future is not taken'); assert.equal(db.session.focusSec, 0); assert.equal(db.session.sinceBreak, 0);
+});
+
 test('session settings are clamped, and a session on disk survives a reload', () => {
   let db = run(fresh(), 'settings.set', { session: { goalMin: '90', breakEvery: 0, breakMin: 999 }, flowExe: '  C:\\x\\FLOW.exe ' }).db;
   assert.deepEqual(db.settings.session, { goalMin: 90, breakEvery: 0, breakMin: 120, notify: true });

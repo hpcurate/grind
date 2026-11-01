@@ -360,7 +360,11 @@ const OPS = {
   'session.start'(db, p, ctx, fx) {
     if (db.session) return;
     const S = db.settings.session;
-    db.session = { start: ctx.now, phase: 'focus', phaseStart: ctx.now, running: true, focusSec: 0, breakSec: 0, sinceBreak: 0, breaks: 0,
+    // FLOW's pill can hand over an open session: its start and its minutes carry on here
+    const c = p && p.carry && typeof p.carry === 'object' ? p.carry : null;
+    const start = c && Number.isFinite(+c.start) && +c.start <= ctx.now && +c.start > ctx.now - 864e5 ? +c.start : ctx.now;
+    db.session = { start, phase: 'focus', phaseStart: ctx.now, running: true, focusSec: c ? within(c.focusSec, 0, 86400, 0) : 0, breakSec: 0,
+                   sinceBreak: c ? within(c.sinceBreak, 0, 86400, 0) : 0, breaks: 0,
                    goalSec: within(p.goalMin, 5, 720, S.goalMin) * 60, breakEvery: within(p.breakEvery, 0, 240, S.breakEvery) * 60,
                    breakLen: within(p.breakMin, 1, 120, S.breakMin) * 60, goalHit: false };
     fx.push({ type: 'session' });

@@ -18,7 +18,7 @@ const { spawn } = require('child_process');
 
 const PIPE = process.env.GRIND_FLOW_PIPE || '\\\\.\\pipe\\hugo-flow-link';
 
-function create({ exe, onMessage, onState, log }) {
+function create({ exe, onMessage, onState, log, hello }) {
   let sock = null, buf = '', want = false, state = 'off', last = null, tries = 0, timer = null;
   const set = s => { if (s !== state) { const was = state; state = s; onState && onState(s, was); } };
   function send(obj) { if (sock && !sock.destroyed) { try { sock.write(JSON.stringify(obj) + '\n'); } catch {} } }
@@ -40,7 +40,7 @@ function create({ exe, onMessage, onState, log }) {
     });
     s.on('close', () => { if (sock === s) { sock = null; if (state !== 'off') set(want ? 'lost' : 'off'); want = false; } });
     s.on('error', () => {});
-    send({ t: 'hello', app: 'GRIND', v: 1 });
+    send({ t: 'hello', app: 'GRIND', v: 1, ...(hello ? hello() : {}) });   // hello() adds the colours FLOW's pill wears
     send({ t: 'show' });
     if (last) send(last);
   }
@@ -53,10 +53,10 @@ function create({ exe, onMessage, onState, log }) {
       if (!want) return;
       if (!launched) {
         const where = exe && exe();
-        if (!where || !fs.existsSync(where)) { want = false; set('off'); log && log('FLOW not found at ' + where); onMessage && onMessage({ t: 'error', msg: 'FLOW not found — set its path in settings' }); return; }
+        if (!where || !fs.existsSync(where)) { want = false; set('off'); log && log('CORE not found at ' + where); onMessage && onMessage({ t: 'error', msg: 'CORE not found — set its path in settings' }); return; }
         try { spawn(where, ['--grind-link'], { detached: true, stdio: 'ignore' }).unref(); } catch (e) { want = false; set('off'); return; }
       }
-      if (++tries > 40) { want = false; set('off'); onMessage && onMessage({ t: 'error', msg: 'FLOW did not answer' }); return; }
+      if (++tries > 40) { want = false; set('off'); onMessage && onMessage({ t: 'error', msg: 'CORE did not answer' }); return; }
       clearTimeout(timer);
       timer = setTimeout(() => tryConnect(true), 500);
     });

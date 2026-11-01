@@ -41,6 +41,7 @@ npm install
 npm start            # dev
 npm test             # node test/unit.cjs — the core, no window
 npm run test:ui      # electron test/visual.cjs — the real app, throwaway profile, shot-*.png
+node ../_prompts/checks.cjs grind <words>   # unit + the whole GUI suite (its checks walk one scenario): ../_prompts/CHECKS.md
 npm run pack         # dist/GRIND-win32-x64/GRIND.exe  ← what the user runs
 npm run icon         # redraw build/icon.ico from scripts/make-icon.cjs
 npm run shortcut     # (re)write the Start-menu shortcut to the packed exe
@@ -165,8 +166,10 @@ link button is pressed, starting FLOW first if it is not running (path in
 settings, default `Documents/github/flow/dist/FLOW-win32-x64/FLOW.exe`).
 Linking with no session running starts one.
 
-- grind → flow: `{t:'hello',app:'GRIND',v:1}`, `{t:'show'}`, `{t:'session',phase,running,left,total,focus,goal,label}`
-  on every change and every 2 s (`phase:'idle'` with no session), `{t:'bye'}`.
+- grind → flow: `{t:'hello',app:'GRIND',v:1,k:[focus,next,break]}`, `{t:'show'}`,
+  `{t:'session',phase,running,left,total,focus,goal,every,label}` on every change and every 2 s
+  (`phase:'idle'` with no session), `{t:'bye'}`. `k` (GRIND's orange, yellow, teal) and `every`
+  (the break interval, seconds) are for FLOW's pill; older FLOWs ignore them.
 - flow → grind: `{t:'hello',app:'FLOW',v:1}`, `{t:'cmd',cmd:'toggle'|'skip'|'end'}`, `{t:'bye'}`.
 - While linked GRIND is the clock: FLOW's timer shows the session, its music
   pauses on the breaks, it wears a **GRIND** chip, and its own play / skip
@@ -174,6 +177,12 @@ Linking with no session running starts one.
 - **One app at a time:** if TUTOR links, FLOW tells GRIND bye (GRIND shows
   "FLOW unlinked"; the session keeps running). Unlinking keeps the session;
   ending the session unlinks.
+- **FLOW's pill can start GRIND linked:** `GRIND.exe --flow-link` (at launch, or to
+  the running GRIND as a second instance) starts a session if none runs and links.
+  When the pill hands over an open session it adds
+  `--flow-carry=<start ms>:<focus s>:<since break s>`: the new session keeps that
+  start and those minutes (`session.start` takes `carry`; clamped, a future start
+  is ignored). A session already running wins and the carry is dropped.
 - `GRIND_FLOW_PIPE` moves the pipe and stops GRIND from launching FLOW — the
   GUI test runs a stand-in FLOW on a private pipe, so it never touches a real one.
 
@@ -210,3 +219,27 @@ Linking with no session running starts one.
   (FLOW follows GRIND's session and wears a GRIND chip; FLOW now names
   whichever app is linked and hands over when another one links). Session and
   FLOW cards in settings; tray items; taskbar progress. 26 unit + 18 GUI checks.
+- **1.2.0 — 2026-10-19** — for FLOW's new pill (a session bar on top of
+  everything): the hello carries GRIND's colours and the session its break
+  interval; `--flow-link` / `--flow-carry` start GRIND linked from the pill,
+  carrying an open session's start and minutes over. 27 unit + 18 GUI checks;
+  checked end to end with the packed app (throwaway profile, private pipe).
+- **2026-10-25 — tests only, no version, not packed** — checks by area (Hugo:
+  "only do parts of the checks for specific issues and run bigger checks if an
+  issue arises"). `test/visual.cjs` takes `UI_ONLY=<words>` (the first check and
+  the renderer errors always run); `node ../_prompts/checks.cjs grind <words>`
+  runs it, and `../_prompts/CHECKS.md` says how much to run. The app is unchanged.
+  Run alone, 4 of 16 checks failed: they walk one scenario, each on from the one before. So
+  the runner runs the whole suite (12 s) whatever the words; `UI_ONLY` by hand still filters.
+- **2026-10-25 — tests only, no version, not packed** — its CPU, measured (Hugo's r261021-1ey8 "optimize to run app,
+  it uses to much cpu": "also applicable to flow and all the other apps"). `npm run perf` (new, `test/perf.cjs` on
+  `../_prompts/perf-lib.cjs`; a throwaway profile, the network off) measures each state for 10 s after 6 s, as % of the
+  whole CPU: home ~0, learn 0.5 % (its first read of the lessons), posts, goals and settings 0.01–0.04 %, a session
+  going 0.01–0.03 % in front, unfocused, minimised or in the tray. Nothing to cut: no endless animation, no loop,
+  nothing painting while hidden. The app is unchanged.
+- **1.2.1 — 2026-11-01** — Hugo's r261031-ln0w ("don't you think we should implement root to core, completely archive root and have one app for
+  everything (other apps can come later. flow can merge immediately too)"): FLOW and ROOT desktop are windows of CORE's since CORE
+  0.39.0. The link's pipe is CORE's clock's: with no link there, GRIND starts **CORE** now
+  (`core/dist/CORE-win32-x64/CORE.exe --grind-link`; FLOW.exe before). Settings' path is labelled CORE.exe (its key is still
+  `flowExe`); the errors say CORE. Committed with 1.2.0's changes, which had waited uncommitted since 2026-10-19 (the git sweep's
+  "8 uncommitted"). Log `updates/26-11-01_update_v1.2.1.md`.

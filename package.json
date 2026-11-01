@@ -1,7 +1,7 @@
 {
   "name": "grind",
   "productName": "GRIND",
-  "version": "1.1.0",
+  "version": "1.2.1",
   "description": "GRIND — production, sound design and socials hub",
   "main": "main.js",
   "author": "Hugo",
@@ -10,6 +10,7 @@
     "start": "electron .",
     "test": "node test/unit.cjs",
     "test:ui": "electron test/visual.cjs",
+    "perf": "electron test/perf.cjs",
     "icon": "node scripts/make-icon.cjs",
     "pack": "electron-packager . GRIND --platform=win32 --arch=x64 --icon=build/icon.ico --out=dist --overwrite --prune=true --ignore=\"(^/dist|^/test|^/scripts|^/\\.git|^/shot-.*\\.png|^/GRIND\\.md|^/README\\.md)\"",
     "shortcut": "electron scripts/shortcut.cjs"

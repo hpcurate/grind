@@ -5,7 +5,8 @@
 
    Never touches the real machine: the clipboard and the browser are replaced
    by recorders, notifications and hotkeys stay off.
-   Run: npm run test:ui   (GRIND_LOG=1 also echoes the renderer console) */
+   Run: npm run test:ui   (GRIND_LOG=1 also echoes the renderer console; UI_ONLY=<words> runs only the checks
+   whose names match, plus the first and the last: _prompts/CHECKS.md) */
 'use strict';
 const { app, BrowserWindow, ipcMain } = require('electron');
 const fs = require('fs');
@@ -42,7 +43,12 @@ ipcMain.removeHandler('open-url'); ipcMain.handle('open-url', (_e, u) => { opene
 
 const pause = ms => new Promise(r => setTimeout(r, ms));
 const results = [];
-async function check(name, fn) {
+/* UI_ONLY=<words>: a case-blind regex on the names ("palette|send" takes both). The first check always runs
+   (the boot), and so do the ones marked { always: true }: the last reads the console of all that ran */
+const only = process.env.UI_ONLY ? new RegExp(process.env.UI_ONLY, 'i') : null;
+let skipped = 0;
+async function check(name, fn, { always } = {}) {
+  if (only && results.length && !always && !only.test(name)) { skipped++; return; }
   try { await fn(); results.push(['ok', name]); console.log('  ok   ' + name); }
   catch (e) { results.push(['FAIL', name]); console.log('  FAIL ' + name + '\n       ' + String(e && e.message || e).split('\n').slice(0, 6).join('\n       ')); }
 }
@@ -273,8 +279,8 @@ app.whenReady().then(async () => {
       try {
         await click('[data-act="sess-link"]');              // idle: linking starts a session
         await until(`${linkOn} && !!document.getElementById('ss-tm')`, 8000, 'linked');
-        assert.deepEqual(got.slice(0, 2), [{ t: 'hello', app: 'GRIND', v: 1 }, { t: 'show' }]);
-        await heard(() => got.some(m => m.t === 'session' && m.phase === 'focus' && m.running === true && m.label === 'GRIND'), 'the session went to FLOW');
+        assert.deepEqual(got.slice(0, 2), [{ t: 'hello', app: 'GRIND', v: 1, k: ['#FF4F2E', '#FFC23D', '#14B8A0'] }, { t: 'show' }]);
+        await heard(() => got.some(m => m.t === 'session' && m.phase === 'focus' && m.running === true && m.label === 'GRIND' && m.every === 3000), 'the session (and its break interval, for the pill) went to FLOW');
         assert.match(await text('#rail-foot'), /linked to FLOW/);
         await shot('10-linked');
         say({ t: 'cmd', cmd: 'toggle' });
@@ -317,13 +323,13 @@ app.whenReady().then(async () => {
       assert.equal(d.posts.length, 1);
     });
 
-    await check('no renderer errors', async () => { assert.deepEqual(errors, []); });
+    await check('no renderer errors', async () => { assert.deepEqual(errors, []); }, { always: true });
   } catch (e) {
     console.error(e);
     results.push(['FAIL', 'harness']);
   }
   const fails = results.filter(r => r[0] === 'FAIL').length;
-  console.log(`\n${results.length - fails}/${results.length} passed · screenshots: shot-*.png`);
+  console.log(`\n${results.length - fails}/${results.length} passed${skipped ? ` · ${skipped} skipped (UI_ONLY)` : ''} · screenshots: shot-*.png`);
   app.isQuitting = true;
   try { fs.rmSync(root, { recursive: true, force: true }); } catch {}
   app.exit(fails ? 1 : 0);

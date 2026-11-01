@@ -36,7 +36,9 @@ const DB_FILE = path.join(DATA, 'grind.json');
 const TOKEN_FILE = path.join(DATA, 'todoist.bin');
 const WIN_FILE = path.join(DATA, 'win-state.json');
 const ICON = path.join(__dirname, 'build', 'icon.ico');
-const FLOW_EXE = path.join(DOCS, 'github', 'flow', 'dist', 'FLOW-win32-x64', 'FLOW.exe');
+// 1.2.1 (CORE 0.39.0, Hugo's r261031-ln0w): FLOW lives in CORE, and CORE's clock serves the link — no link there: CORE is started
+// (settings' "flowExe" still overrides it, under its old name)
+const FLOW_EXE = path.join(DOCS, 'github', 'core', 'dist', 'CORE-win32-x64', 'CORE.exe');
 
 const MIN = 60 * 1000;
 const SCAN_EVERY = 5 * MIN, POLL_EVERY = 10 * MIN, DESK_EVERY = 30 * MIN;
@@ -150,6 +152,7 @@ function sessionNotify(title, body) {
 let unlinking = false;
 const flow = FlowLink.create({
   exe: () => (process.env.GRIND_FLOW_PIPE ? null : db.settings.flowExe || FLOW_EXE),
+  hello: () => ({ k: ['#FF4F2E', '#FFC23D', '#14B8A0'] }),   // focus · next-break bar · break, for FLOW's pill
   onState: (s, was) => {
     status.flow = s;
     if (s === 'on') flowUpdate();
@@ -168,7 +171,7 @@ function flowUpdate() {
   if (!flow.connected) return;
   const v = Derive.sessionView(db.session, Date.now());
   flow.update(v ? { t: 'session', phase: v.phase, running: v.running, left: Math.round(v.left), total: Math.round(v.total),
-                    focus: Math.round(v.focus), goal: v.goal, label: 'GRIND' }
+                    focus: Math.round(v.focus), goal: v.goal, every: v.breakEvery, label: 'GRIND' }
                 : { t: 'session', phase: 'idle', running: false, label: 'GRIND' });
 }
 function unlinkFlow() {
@@ -425,7 +428,18 @@ function createTray() {
   tray.on('click', showWin);
 }
 
-app.on('second-instance', showWin);
+/* FLOW's pill starts GRIND linked (--flow-link), and when it hands over an open
+   session, its minutes come too (--flow-carry=<start ms>:<focus s>:<since break s>):
+   the session starts with them unless one is already running, then links. */
+function fromFlow(argv) {
+  if (!argv.includes('--flow-link')) return false;
+  const c = (argv.find(x => x.startsWith('--flow-carry=')) || '').slice(13).split(':').map(Number);
+  const carry = c.length === 3 && c.every(Number.isFinite) ? { start: c[0], focusSec: c[1], sinceBreak: c[2] } : null;
+  if (!db.session) commit('session.start', carry ? { carry } : {});
+  flow.open();
+  return true;
+}
+app.on('second-instance', (_e, argv) => { showWin(); fromFlow(argv || []); });
 
 app.whenReady().then(() => {
   if (!primary) return;
@@ -442,6 +456,7 @@ app.whenReady().then(() => {
   setTimeout(() => { poll(); refreshDesk(); }, 2500);
   setInterval(sessionTick, 1000);
   setInterval(flowUpdate, 2000);          // keeps FLOW's countdown honest between changes
+  fromFlow(process.argv);
 });
 
 app.on('before-quit', () => { app.isQuitting = true; writeWin(); unlinkFlow(); if (db) writeNow(); });

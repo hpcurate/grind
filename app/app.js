@@ -578,8 +578,8 @@
 
         <div class="card"><h3>FLOW</h3>
           <div class="sub">The link button in the session bar opens FLOW and ties it to the session: FLOW's timer shows GRIND's, its music pauses on your breaks, and it wears a GRIND chip. FLOW's play and skip buttons drive the session from there. One app at a time — linking TUTOR takes FLOW over.</div>
-          <div class="kv"><label>FLOW.exe</label><div class="row"><input type="text" id="fx-path" value="${esc(db.settings.flowExe || '')}" data-change="flowExe" placeholder="default: Documents\\github\\flow\\dist\\FLOW-win32-x64\\FLOW.exe" style="flex:1;min-width:0">
-            <button class="btn ghost sm" data-act="pick-flow" title="pick FLOW.exe">…</button></div></div>
+          <div class="kv"><label>CORE.exe</label><div class="row"><input type="text" id="fx-path" value="${esc(db.settings.flowExe || '')}" data-change="flowExe" placeholder="default: Documents\\github\\core\\dist\\CORE-win32-x64\\CORE.exe (FLOW and the link are in CORE)" style="flex:1;min-width:0">
+            <button class="btn ghost sm" data-act="pick-flow" title="pick CORE.exe">…</button></div></div>
           <div class="status-line">${{ on: 'linked', connecting: 'linking…', lost: 'FLOW closed — not linked', off: 'not linked' }[st.flow] || 'not linked'}</div>
         </div>
 

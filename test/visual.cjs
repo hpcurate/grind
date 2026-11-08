@@ -323,6 +323,18 @@ app.whenReady().then(async () => {
       assert.equal(d.posts.length, 1);
     });
 
+    // 1.3.0 (r261108-t6rr, CORE's switcher 13): a zone of CORE's portrait monitor — 531 × 920 (a top zone) and 1068 × 920 (the bottom
+    // one): every page, nothing past the edge
+    await check('1.3.0 (r261108-t6rr): in a zone of the portrait monitor — 531 × 920 and 1068 × 920, every page fits', async () => {
+      const pages = await js(`[...document.querySelectorAll('#rail [data-go]')].map(b => b.dataset.go)`);
+      assert.ok(pages.length >= 3, 'the rail\'s pages: ' + pages);
+      for (const [w, h] of [[531, 920], [1068, 920]]) {
+        win.setBounds({ width: w, height: h }); await pause(500);
+        assert.equal(win.getBounds().width, w, 'the window takes ' + w);
+        for (const p of pages) { await click(`#rail [data-go="${p}"]`); await pause(300); await fit(p + ' at ' + w); if (w === 531) await shot('13-zone-' + p); }
+      }
+      win.setBounds({ width: 1280, height: 840 }); await pause(400);
+    });
     await check('no renderer errors', async () => { assert.deepEqual(errors, []); }, { always: true });
   } catch (e) {
     console.error(e);

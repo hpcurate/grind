@@ -370,7 +370,7 @@ function registerHotkeys() {
 }
 
 /* ── Window ───────────────────────────────────────────────────────────── */
-const SIZE = { width: 1280, height: 840, minWidth: 1000, minHeight: 680 };
+const SIZE = { width: 1280, height: 840, minWidth: 480, minHeight: 680 };   // 1.3.0: a zone of CORE's portrait monitor (531 wide) fits
 function readWin() { try { return JSON.parse(fs.readFileSync(WIN_FILE, 'utf8')); } catch { return {}; } }
 function writeWin() {
   if (!win || win.isDestroyed()) return;

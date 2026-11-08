@@ -243,3 +243,7 @@ Linking with no session running starts one.
   (`core/dist/CORE-win32-x64/CORE.exe --grind-link`; FLOW.exe before). Settings' path is labelled CORE.exe (its key is still
   `flowExe`); the errors say CORE. Committed with 1.2.0's changes, which had waited uncommitted since 2026-10-19 (the git sweep's
   "8 uncommitted"). Log `updates/26-11-01_update_v1.2.1.md`.
+- **1.3.0 — 2026-11-08** — r261108-t6rr (CORE's switcher 13, the roadmap's phase 1): GRIND fits a zone of CORE's portrait monitor
+  (531 × 920 and 1068 × 920). Least width 480 (was 1000); under 760 px (`app/grind.css`) the rail is a row of pages under the title
+  strip and the pages go one column (cards, posts' kanban, the curriculum over its reader, goals, settings). A GUI check opens every
+  page at both sizes and FITs it. Log `updates/26-11-08_update_v1.3.0.md`.
